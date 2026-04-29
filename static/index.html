@@ -279,7 +279,6 @@
     display: flex; align-items: center; justify-content: center;
   }
   .compose-toolbar button:hover { background: var(--hover); color: var(--text); }
-  .compose-toolbar button.recording { color: var(--red); background: rgba(196,49,75,0.15); }
   .compose-toolbar .tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
   .compose-input {
     width: 100%; padding: 10px 14px;
@@ -362,6 +361,39 @@
   .dp-btn.approve { background: var(--green); color: white; }
   .dp-btn.reject { background: var(--red); color: white; }
 
+  /* ── Typing Indicator ───────────────────────────────────── */
+  .typing-bar {
+    padding: 4px 20px 4px 64px;
+    font-size: 12px; color: var(--text-dim);
+    min-height: 0; overflow: hidden;
+    transition: min-height .2s;
+  }
+  .typing-bar.active { min-height: 22px; }
+  .typing-bar .dots { display: inline-block; }
+  .typing-bar .dots span {
+    display: inline-block; width: 4px; height: 4px;
+    background: var(--text-dim); border-radius: 50%;
+    margin: 0 1px; animation: bounce .9s infinite;
+  }
+  .typing-bar .dots span:nth-child(2) { animation-delay: .15s; }
+  .typing-bar .dots span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-4px)} }
+
+  /* ── Mic recording pulse & timer ────────────────────────── */
+  .compose-toolbar button.recording {
+    color: var(--red); background: rgba(196,49,75,0.15);
+    animation: mic-pulse 1.2s infinite;
+  }
+  @keyframes mic-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(196,49,75,.4)} 50%{box-shadow:0 0 0 6px rgba(196,49,75,0)} }
+  .rec-timer {
+    font-size: 11px; color: var(--red); font-weight: 600;
+    margin-left: 2px; font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Timeout card accent ───────────────────────────────── */
+  .dp-card.timeout { border-left: 3px solid var(--red); }
+  .dp-card.timeout .dp-tag { color: var(--red); }
+
   /* ── Scrollbar ─────────────────────────────────────────── */
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -422,6 +454,7 @@
     </div>
     <div class="mute-bar" id="mute-bar">🔇 You are muted — <span id="mute-sec">0</span>s remaining</div>
     <div class="messages" id="messages"></div>
+    <div class="typing-bar" id="typing-bar"></div>
     <div class="compose">
       <div class="compose-box">
         <div class="compose-toolbar">
@@ -429,7 +462,7 @@
           <button title="Attach">📎</button>
           <button title="Emoji">😊</button>
           <span class="tb-sep"></span>
-          <button id="mic-btn" title="Record audio" onclick="toggleMic()">🎤</button>
+          <button id="mic-btn" title="Record audio" onclick="toggleMic()">🎤</button><span class="rec-timer" id="rec-timer"></span>
         </div>
         <textarea class="compose-input" id="msg-input" placeholder="Type a new message"
                   rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
@@ -468,6 +501,9 @@ const SAMPLES = {
 const AVATAR_COLORS = ['#6264a7','#c4314b','#e97548','#92c353','#13a4a5','#b4a0ff','#e5558a','#498205'];
 
 let ws=null, myName='', mediaRecorder=null, audioChunks=[], isRecording=false;
+let typingTimeout=null, recInterval=null, recStart=0;
+let typingUsers={}; // {name: 'typing'|'recording'}
+let pendingMsg=null; // {label:'Sending...'} to show placeholder bubble
 
 function avatarColor(name){ return AVATAR_COLORS[name.charCodeAt(0)%AVATAR_COLORS.length]; }
 function initial(name){ return name.charAt(0).toUpperCase(); }
@@ -491,7 +527,7 @@ function joinMeeting(){
 
 function connect(proto){
   ws=new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(myName)}`);
-  ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='state')render(d);};
+  ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='state'){if(d.typing)typingUsers=d.typing;renderTyping();render(d);}else if(d.type==='typing'){typingUsers=d.typing||{};renderTyping();}};
   ws.onclose=()=>setTimeout(()=>connect(proto),2000);
   setInterval(()=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({action:'ping'}));},3000);
 }
@@ -500,6 +536,7 @@ function connect(proto){
    RENDER
    ═══════════════════════════════════════════════════════════ */
 function render(s){
+  pendingMsg=null;
   renderUsers(s.users, s.user_state);
   renderMessages(s.transcript);
   renderStats(s.user_state);
@@ -599,16 +636,28 @@ function renderDecisions(decs){
     el.innerHTML='<div class="dp-empty">No pending decisions.<br><span style="font-size:11px;color:var(--text-dim)">Propose something in chat!</span></div>';
     return;
   }
-  el.innerHTML=decs.map(d=>`<div class="dp-card">
-    <div class="dp-tag">Decision #${d.id}</div>
-    <div class="dp-by">by ${d.proposer}</div>
-    <div class="dp-text">${esc(d.summary)}</div>
-    <input id="r-${d.id}" placeholder="Reason (optional)">
-    <div class="dp-btns">
-      <button class="dp-btn approve" onclick="resolve(${d.id},true)">✅ Approve</button>
-      <button class="dp-btn reject" onclick="resolve(${d.id},false)">❌ Reject</button>
-    </div>
-  </div>`).join('');
+  el.innerHTML=decs.map(d=>{
+    const isTimeout=d.kind==='timeout';
+    const cls=isTimeout?'dp-card timeout':'dp-card';
+    const tag=isTimeout?`⏱️ Timeout Request`:`Decision #${d.id}`;
+    const summary=isTimeout?`Mute <strong>${d.target}</strong> for talking too much (${d.word_count||'?'} words)`
+      :esc(d.summary);
+    const appLabel=isTimeout?'🔇 Mute':'✅ Approve';
+    const rejLabel=isTimeout?'🙅 Spare':'❌ Reject';
+    const isSelf=isTimeout&&d.target===myName;
+    const btns=isSelf
+      ?`<div class="dp-text" style="font-size:11px;color:var(--text-dim);text-align:center">⏳ Waiting for someone else to decide...</div>`
+      :`<input id="r-${d.id}" placeholder="Reason (optional)"><div class="dp-btns"><button class="dp-btn approve" onclick="resolve(${d.id},true)">${appLabel}</button><button class="dp-btn reject" onclick="resolve(${d.id},false)">${rejLabel}</button></div>`;
+    const selfBtns=(!isTimeout&&d.proposer===myName)
+      ?`<div class="dp-text" style="font-size:11px;color:var(--text-dim);text-align:center">⏳ Waiting for a friend to decide...</div>`
+      :btns;
+    return `<div class="${cls}">
+      <div class="dp-tag">${tag}</div>
+      <div class="dp-by">by ${d.proposer}</div>
+      <div class="dp-text">${summary}</div>
+      ${selfBtns}
+    </div>`;
+  }).join('');
 }
 
 function renderMute(s){
@@ -627,6 +676,27 @@ function renderMute(s){
   }
 }
 
+function showPending(label){
+  pendingMsg={label};
+  const el=document.getElementById('messages');
+  // Append pending bubble at bottom
+  const div=document.createElement('div');
+  div.className='msg-pending';
+  div.id='pending-bubble';
+  div.innerHTML=`<div class="pending-avatar" style="background:${avatarColor(myName)}">${initial(myName)}</div><span class="pending-dots"><span></span><span></span><span></span></span><span class="pending-label">${label}</span>`;
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
+}
+
+function renderTyping(){
+  const el=document.getElementById('typing-bar');
+  const others=Object.entries(typingUsers).filter(([n])=>n!==myName);
+  if(!others.length){el.classList.remove('active');el.innerHTML='';return;}
+  const parts=others.map(([n,kind])=>kind==='recording'?`${n} is recording 🎙️`:`${n} is typing`);
+  el.innerHTML=parts.join(', ')+' <span class="dots"><span></span><span></span><span></span></span>';
+  el.classList.add('active');
+}
+
 /* ═══════════════════════════════════════════════════════════
    ACTIONS
    ═══════════════════════════════════════════════════════════ */
@@ -635,6 +705,8 @@ function sendMessage(){
   const t=inp.value.trim();
   if(!t||!ws||ws.readyState!==1)return;
   ws.send(JSON.stringify({action:'speech',text:t}));
+  clearTimeout(typingTimeout); ws.send(JSON.stringify({action:'stop_typing'}));
+  showPending('Sending...');
   inp.value=''; inp.style.height='auto';
 }
 function quickSend(k){
@@ -655,7 +727,10 @@ async function toggleMic(){
   const btn=document.getElementById('mic-btn');
   if(isRecording){
     isRecording=false; btn.classList.remove('recording'); btn.textContent='🎤';
+    clearInterval(recInterval); document.getElementById('rec-timer').textContent='';
+    if(ws&&ws.readyState===1) ws.send(JSON.stringify({action:'stop_recording'}));
     if(mediaRecorder&&mediaRecorder.state!=='inactive') mediaRecorder.stop();
+    showPending('Transcribing audio...');
     return;
   }
   try{
@@ -670,13 +745,18 @@ async function toggleMic(){
     };
     mediaRecorder.start(); isRecording=true;
     btn.classList.add('recording'); btn.textContent='⏹';
+    if(ws&&ws.readyState===1) ws.send(JSON.stringify({action:'recording'}));
+    recStart=Date.now(); document.getElementById('rec-timer').textContent='0:00';
+    recInterval=setInterval(()=>{const s=Math.floor((Date.now()-recStart)/1000);document.getElementById('rec-timer').textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');},1000);
   }catch(e){console.error('Mic denied',e);}
 }
 
 /* Auto-resize textarea */
 document.addEventListener('DOMContentLoaded',()=>{
   const ta=document.getElementById('msg-input');
-  if(ta) ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';});
+  if(ta){ ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';
+    if(ws&&ws.readyState===1){ws.send(JSON.stringify({action:'typing'}));clearTimeout(typingTimeout);typingTimeout=setTimeout(()=>ws.send(JSON.stringify({action:'stop_typing'})),2000);}
+  }); }
 });
 </script>
 </body>

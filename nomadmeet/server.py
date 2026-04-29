@@ -66,6 +66,7 @@ def get_full_state(username: str) -> dict:
         "type": "state",
         "transcript": ROOM.get_transcript(),
         "users": list(ROOM.users.keys()),
+        "typing": ROOM.get_typing_users(),
         "user_state": {
             "username": username,
             "total_words": user.get("total_words", 0),
@@ -80,6 +81,8 @@ def get_full_state(username: str) -> dict:
                 "id": d.id,
                 "proposer": d.proposer,
                 "summary": d.summary,
+                "kind": d.kind,
+                "target": d.target,
             }
             for d in ROOM.get_unresolved_decisions()
         ],
@@ -110,16 +113,20 @@ def process_speech_sync(text: str, username: str) -> list[dict]:
 
     ROOM.add_message("user", text, username=username)
 
-    # Thresholds
+    # Thresholds — instead of auto-muting, create a timeout request for approval
     if word_count > WORD_LIMIT:
         user["warnings"] = user.get("warnings", 0) + 1
         if user["warnings"] >= 2:
-            user["muted_until"] = time.time() + TIMEOUT_DURATION
+            # Request timeout — must be approved by another participant
+            d = ROOM.add_timeout_request("MeetBot", username, word_count)
+            line = random.choice(FEEDBACK_LINES)
+            ROOM.add_message("assistant",
+                f"🚨 **{username} hit 2 warnings!** {word_count} words (~{int(simulated_time)}s). {line}\n\n"
+                f"⏳ **Timeout request #{d.id}** — a friend must approve or reject the mute.")
             user["warnings"] = 0
-            ROOM.add_message("assistant", f"🔇 **{username} TIMED OUT!** ~{int(simulated_time)}s / {word_count} words. Muted for {TIMEOUT_DURATION}s. ☕")
         else:
             line = random.choice(FEEDBACK_LINES)
-            ROOM.add_message("assistant", f"⚠️ **Warning {user['warnings']}/2 for {username}** — {word_count} words (~{int(simulated_time)}s). {line} *Next violation = timeout!*")
+            ROOM.add_message("assistant", f"⚠️ **Warning {user['warnings']}/2 for {username}** — {word_count} words (~{int(simulated_time)}s). {line} *Next violation = timeout request!*")
     elif word_count > WARNING_THRESHOLD:
         ROOM.add_message("assistant", f"🟡 {username} getting wordy... {word_count}/{WORD_LIMIT} words.")
 
@@ -160,12 +167,33 @@ async def websocket_endpoint(ws: WebSocket, username: str):
             action = data.get("action")
 
             if action == "speech":
+                ROOM.set_typing(username, None)  # clear typing indicator
                 text = data.get("text", "").strip()
                 if text:
                     process_speech_sync(text, username)
                 # Broadcast updated state to all
                 for uname in list(manager.connections.keys()):
                     await manager.send_to(uname, get_full_state(uname))
+
+            elif action == "typing":
+                ROOM.set_typing(username, "typing")
+                for uname in list(manager.connections.keys()):
+                    await manager.send_to(uname, {"type": "typing", "typing": ROOM.get_typing_users()})
+
+            elif action == "stop_typing":
+                ROOM.set_typing(username, None)
+                for uname in list(manager.connections.keys()):
+                    await manager.send_to(uname, {"type": "typing", "typing": ROOM.get_typing_users()})
+
+            elif action == "recording":
+                ROOM.set_typing(username, "recording")
+                for uname in list(manager.connections.keys()):
+                    await manager.send_to(uname, {"type": "typing", "typing": ROOM.get_typing_users()})
+
+            elif action == "stop_recording":
+                ROOM.set_typing(username, None)
+                for uname in list(manager.connections.keys()):
+                    await manager.send_to(uname, {"type": "typing", "typing": ROOM.get_typing_users()})
 
             elif action == "approve":
                 did = data.get("decision_id")
@@ -207,6 +235,7 @@ async def upload_audio(username: str, file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     text = transcribe_audio(tmp_path)
+    ROOM.set_typing(username, None)  # clear recording indicator
     if text and not text.startswith("[Transcription failed"):
         ROOM.add_message("assistant", f"🎙️ *{username} (voice):*")
         process_speech_sync(text, username)

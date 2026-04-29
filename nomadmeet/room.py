@@ -13,6 +13,9 @@ class PendingDecision:
     proposer: str
     summary: str
     timestamp: float
+    kind: str = "decision"  # "decision" or "timeout"
+    target: str | None = None  # who to mute (for timeout requests)
+    word_count: int = 0
     resolved: bool = False
     approved: bool | None = None
     resolver: str | None = None
@@ -23,9 +26,10 @@ class MeetingRoom:
     """Thread-safe shared meeting room."""
 
     def __init__(self):
-        self.transcript: list[dict] = []  # shared chat messages
-        self.users: dict[str, dict] = {}  # username -> per-user state
+        self.transcript: list[dict] = []
+        self.users: dict[str, dict] = {}
         self.pending_decisions: list[PendingDecision] = []
+        self.typing_users: dict[str, str] = {}  # username -> "typing" | "recording"
         self.topic: str = "Q3 planning & team logistics"
         self._decision_counter = 0
 
@@ -60,6 +64,18 @@ class MeetingRoom:
         with _lock:
             return list(self.transcript)
 
+    def set_typing(self, username: str, mode: str | None):
+        """Set typing indicator. mode = 'typing', 'recording', or None to clear."""
+        with _lock:
+            if mode:
+                self.typing_users[username] = mode
+            else:
+                self.typing_users.pop(username, None)
+
+    def get_typing_users(self) -> dict[str, str]:
+        with _lock:
+            return dict(self.typing_users)
+
     def add_pending_decision(self, proposer: str, summary: str) -> PendingDecision:
         with _lock:
             self._decision_counter += 1
@@ -68,6 +84,23 @@ class MeetingRoom:
                 proposer=proposer,
                 summary=summary,
                 timestamp=time.time(),
+                kind="decision",
+            )
+            self.pending_decisions.append(d)
+            return d
+
+    def add_timeout_request(self, proposer: str, target: str, word_count: int) -> PendingDecision:
+        """Request to timeout a user — must be approved by another participant."""
+        with _lock:
+            self._decision_counter += 1
+            d = PendingDecision(
+                id=self._decision_counter,
+                proposer="MeetBot",
+                summary=f"Mute {target} for 2 minutes (over-talking: {word_count} words)",
+                timestamp=time.time(),
+                kind="timeout",
+                target=target,
+                word_count=word_count,
             )
             self.pending_decisions.append(d)
             return d
@@ -81,15 +114,36 @@ class MeetingRoom:
                     d.resolver = resolver
                     d.reason = reason
 
-                    emoji = "✅" if approved else "❌"
-                    verdict = "APPROVED" if approved else "REJECTED"
-                    self.transcript.append({
-                        "role": "assistant",
-                        "content": (
-                            f"{emoji} **Decision {verdict} by {resolver}:** "
-                            f"*{d.summary}*\n\n> {reason}"
-                        ),
-                    })
+                    if d.kind == "timeout":
+                        if approved and d.target and d.target in self.users:
+                            from .config import TIMEOUT_DURATION
+                            self.users[d.target]["muted_until"] = time.time() + TIMEOUT_DURATION
+                            self.users[d.target]["warnings"] = 0
+                            emoji = "🔇"
+                            self.transcript.append({
+                                "role": "assistant",
+                                "content": (
+                                    f"🔇 **{d.target} MUTED by {resolver}!** "
+                                    f"{TIMEOUT_DURATION}s timeout. ☕\n\n> {reason}"
+                                ),
+                            })
+                        else:
+                            self.transcript.append({
+                                "role": "assistant",
+                                "content": (
+                                    f"🛡️ **Timeout for {d.target} REJECTED by {resolver}.**\n\n> {reason}"
+                                ),
+                            })
+                    else:
+                        emoji = "✅" if approved else "❌"
+                        verdict = "APPROVED" if approved else "REJECTED"
+                        self.transcript.append({
+                            "role": "assistant",
+                            "content": (
+                                f"{emoji} **Decision {verdict} by {resolver}:** "
+                                f"*{d.summary}*\n\n> {reason}"
+                            ),
+                        })
                     return d
             return None
 
