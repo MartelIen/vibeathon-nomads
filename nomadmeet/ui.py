@@ -1,9 +1,18 @@
-"""Gradio UI definition for NomadMeet."""
+"""Gradio UI definition for NomadMeet — multi-user version."""
 
 import gradio as gr
 
-from .config import WORD_LIMIT
-from .logic import process_speech, process_audio, make_status, make_bar, initial_state
+from .logic import (
+    process_speech,
+    process_audio,
+    join_meeting,
+    refresh,
+    approve_decision,
+    reject_decision,
+    make_user_status,
+    get_pending_decisions_md,
+)
+from .room import ROOM
 from .samples import SAMPLE_SHORT, SAMPLE_LONG, SAMPLE_DECISION
 
 THEME = gr.themes.Soft(
@@ -13,7 +22,6 @@ THEME = gr.themes.Soft(
 )
 
 CSS = """
-.muted-overlay { background: #ff000022; border: 3px solid red; border-radius: 12px; }
 .container { max-width: 1200px; margin: auto; }
 #speech-bar { transition: all 0.3s ease; }
 """
@@ -21,22 +29,30 @@ CSS = """
 
 def build_app() -> gr.Blocks:
     with gr.Blocks(title="NomadMeet") as app:
-        state = gr.State(initial_state())
+        # Per-session username state
+        username_state = gr.State("")
 
         # Header
         gr.Markdown(
             """
             # 🌍 NomadMeet
             ### The meeting app that tells digital nomads to shut up.
-            *Real-time speech monitoring • Auto-timeout • AI friend approval*
+            *Real-time speech monitoring • Auto-timeout • Friend approval*
             """
         )
 
+        # ── Join bar ──
         with gr.Row():
+            username_input = gr.Textbox(
+                label="👤 Your Name",
+                placeholder="Enter username...",
+                scale=2,
+            )
+            join_btn = gr.Button("🚀 Join Meeting", variant="primary", scale=1)
             meeting_topic = gr.Textbox(
                 value="Q3 planning & team logistics",
                 label="📋 Meeting Topic",
-                scale=3,
+                scale=2,
             )
 
         with gr.Row(equal_height=True):
@@ -54,57 +70,78 @@ def build_app() -> gr.Blocks:
                     elem_id="speech-bar",
                 )
 
-                # Text input
                 with gr.Row():
                     speech_input = gr.Textbox(
                         label="⌨️ Type what you'd say",
-                        placeholder="Start talking...",
+                        placeholder="Join the meeting first...",
                         lines=3,
                         scale=4,
                     )
                     send_btn = gr.Button("📤 Send", variant="primary", scale=1)
 
-                # Microphone input
                 mic_input = gr.Audio(
                     sources=["microphone"],
                     type="filepath",
                     label="🎙️ Or use your microphone",
                 )
 
-                gr.Markdown("**⚡ Quick Demo Buttons:**")
+                gr.Markdown("**⚡ Quick Demo:**")
                 with gr.Row():
-                    btn_short = gr.Button("💬 Say something short")
-                    btn_long = gr.Button("🗣️ Ramble on and on")
-                    btn_decision = gr.Button("🤔 Propose a decision")
+                    btn_short = gr.Button("💬 Short")
+                    btn_long = gr.Button("🗣️ Ramble")
+                    btn_decision = gr.Button("🤔 Decision")
 
-            # ── Right: Status + Friend Panel ──
+            # ── Right: Status + Decision Approval ──
             with gr.Column(scale=2):
                 status_display = gr.Markdown(
-                    value=make_status(initial_state()),
+                    value="# ⏳ Enter a username to join",
                 )
 
                 gr.Markdown("---")
+                gr.Markdown("### 📋 Pending Decisions")
+                pending_display = gr.Markdown(value="No pending decisions.")
 
-                friend_chat = gr.Chatbot(
-                    label="🧑‍🤝‍🧑 Alex (Your Friend Agent)",
-                    height=250,
-                    value=[
-                        {
-                            "role": "assistant",
-                            "content": (
-                                "☕ *Alex is online from a café in Lisbon*\n\n"
-                                "Hey! I'll review any decisions you make. "
-                                "No pressure, but I *will* judge you."
-                            ),
-                        }
-                    ],
-                )
+                with gr.Row():
+                    decision_id_input = gr.Textbox(
+                        label="Decision #",
+                        placeholder="#",
+                        scale=1,
+                    )
+                    decision_reason = gr.Textbox(
+                        label="Your reason",
+                        placeholder="Why?",
+                        scale=2,
+                    )
+                with gr.Row():
+                    approve_btn = gr.Button("✅ Approve", variant="primary")
+                    reject_btn = gr.Button("❌ Reject", variant="stop")
 
-        # ── Event handlers: text input ──
+                decision_result = gr.Markdown(value="")
+
+        # ── Join handler ──
+        def on_join(name):
+            name = name.strip()
+            if not name:
+                return "", ROOM.get_transcript(), make_user_status(""), 0.0, get_pending_decisions_md()
+            transcript, status, bar, pending = join_meeting(name)
+            return name, transcript, status, bar, pending
+
+        join_btn.click(
+            fn=on_join,
+            inputs=[username_input],
+            outputs=[username_state, chatbot, status_display, speech_bar, pending_display],
+        )
+        username_input.submit(
+            fn=on_join,
+            inputs=[username_input],
+            outputs=[username_state, chatbot, status_display, speech_bar, pending_display],
+        )
+
+        # ── Text speech handler ──
         text_args = dict(
             fn=process_speech,
-            inputs=[speech_input, meeting_topic, chatbot, friend_chat, state],
-            outputs=[chatbot, friend_chat, state, status_display, speech_input, speech_bar],
+            inputs=[speech_input, username_state, meeting_topic],
+            outputs=[chatbot, status_display, speech_input, speech_bar, pending_display],
         )
         send_btn.click(**text_args)
         speech_input.submit(**text_args)
@@ -113,12 +150,31 @@ def build_app() -> gr.Blocks:
         btn_long.click(lambda: SAMPLE_LONG, outputs=speech_input).then(**text_args)
         btn_decision.click(lambda: SAMPLE_DECISION, outputs=speech_input).then(**text_args)
 
-        # ── Event handler: microphone input ──
-        mic_args = dict(
+        # ── Mic handler ──
+        mic_input.stop_recording(
             fn=process_audio,
-            inputs=[mic_input, meeting_topic, chatbot, friend_chat, state],
-            outputs=[chatbot, friend_chat, state, status_display, speech_bar],
+            inputs=[mic_input, username_state, meeting_topic],
+            outputs=[chatbot, status_display, speech_bar, pending_display],
         )
-        mic_input.stop_recording(**mic_args)
+
+        # ── Decision approval/rejection ──
+        approve_btn.click(
+            fn=approve_decision,
+            inputs=[decision_id_input, decision_reason, username_state],
+            outputs=[chatbot, decision_result, pending_display],
+        )
+        reject_btn.click(
+            fn=reject_decision,
+            inputs=[decision_id_input, decision_reason, username_state],
+            outputs=[chatbot, decision_result, pending_display],
+        )
+
+        # ── Auto-refresh every 3s so all users see updates ──
+        timer = gr.Timer(3)
+        timer.tick(
+            fn=refresh,
+            inputs=[username_state],
+            outputs=[chatbot, status_display, speech_bar, pending_display],
+        )
 
     return app

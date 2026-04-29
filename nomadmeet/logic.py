@@ -1,216 +1,218 @@
-"""Core meeting logic — speech processing, status, thresholds."""
+"""Core meeting logic — speech processing, status, thresholds (multi-user)."""
 
 import random
 import time
 
 from .config import WORD_LIMIT, TIMEOUT_DURATION, WARNING_THRESHOLD, WORDS_PER_SECOND
 from .prompts import FEEDBACK_LINES
-from .ai import analyze_speech, get_friend_approval, transcribe_audio
+from .ai import analyze_speech, transcribe_audio
+from .room import ROOM
 
 
-def make_status(state: dict) -> str:
-    """Generate the status panel markdown."""
-    muted_until = state.get("muted_until", 0)
+def make_user_status(username: str) -> str:
+    """Generate the status panel markdown for a specific user."""
+    if not username:
+        return "# ⏳ Enter a username to join"
+
+    user = ROOM.get_user_state(username)
+    if not user:
+        return "# ⏳ Enter a username to join"
+
+    muted_until = user.get("muted_until", 0)
     if muted_until > time.time():
         remaining = int(muted_until - time.time())
         return (
-            f"# 🔇 MUTED\n\n"
+            f"# 🔇 MUTED — {username}\n\n"
             f"**{remaining}s remaining**\n\n"
-            f"Total words: {state.get('total_words', 0)}\n\n"
-            f"Turns: {state.get('turn_count', 0)}"
+            f"Total words: {user.get('total_words', 0)} | "
+            f"Turns: {user.get('turn_count', 0)}"
         )
 
-    warnings = state.get("warnings", 0)
+    warnings = user.get("warnings", 0)
     indicator = "🟡 WARNING" if warnings > 0 else "🟢 ACTIVE"
 
+    online = ", ".join(ROOM.users.keys()) or "—"
     return (
-        f"# {indicator}\n\n"
+        f"# {indicator} — {username}\n\n"
         f"Warnings: **{warnings}/2**\n\n"
-        f"Total words: {state.get('total_words', 0)}\n\n"
-        f"Turns: {state.get('turn_count', 0)}\n\n"
-        f"Word limit: {WORD_LIMIT}/turn"
+        f"Total words: {user.get('total_words', 0)} | "
+        f"Turns: {user.get('turn_count', 0)}\n\n"
+        f"Word limit: {WORD_LIMIT}/turn\n\n"
+        f"---\n**Online:** {online}"
     )
 
 
-def make_bar(state: dict) -> float:
+def make_bar(username: str) -> float:
     """Return a 0-1 progress value for the speech bar."""
-    current = state.get("current_words", 0)
+    if not username:
+        return 0.0
+    user = ROOM.get_user_state(username)
+    current = user.get("current_words", 0) if user else 0
     return min(current / WORD_LIMIT, 1.0)
 
 
-def initial_state() -> dict:
-    return {
-        "total_words": 0,
-        "turn_count": 0,
-        "warnings": 0,
-        "muted_until": 0,
-        "current_words": 0,
-    }
+def get_pending_decisions_md() -> str:
+    """Render pending decisions as markdown for the approver panel."""
+    unresolved = ROOM.get_unresolved_decisions()
+    if not unresolved:
+        return "No pending decisions."
+    lines = []
+    for d in unresolved:
+        lines.append(f"**#{d.id}** by {d.proposer}: *{d.summary}*")
+    return "\n\n".join(lines)
 
 
-def process_audio(
-    audio,
-    meeting_topic: str,
-    chat_history: list,
-    friend_history: list,
-    state: dict,
-):
-    """Handle microphone audio input: transcribe then process."""
-    if audio is None:
-        yield chat_history, friend_history, state, make_status(state), make_bar(state)
-        return
+def refresh(username: str):
+    """Called on a timer to refresh the transcript and status for a user."""
+    return (
+        ROOM.get_transcript(),
+        make_user_status(username),
+        make_bar(username),
+        get_pending_decisions_md(),
+    )
 
-    # audio is a tuple (sample_rate, numpy_array) or a filepath string from Gradio
-    if isinstance(audio, str):
-        audio_path = audio
-    else:
-        # Gradio Audio with type="filepath" gives a string
-        audio_path = audio
 
-    text = transcribe_audio(audio_path)
+def join_meeting(username: str):
+    """Register a user and return initial state."""
+    if not username or not username.strip():
+        return ROOM.get_transcript(), make_user_status(""), 0.0, get_pending_decisions_md()
+    username = username.strip()
+    ROOM.add_user(username)
+    return (
+        ROOM.get_transcript(),
+        make_user_status(username),
+        make_bar(username),
+        get_pending_decisions_md(),
+    )
+
+
+def process_audio(audio, username: str, meeting_topic: str):
+    """Handle microphone audio: transcribe then process."""
+    if audio is None or not username:
+        return ROOM.get_transcript(), make_user_status(username), make_bar(username), get_pending_decisions_md()
+
+    text = transcribe_audio(audio)
     if not text or text.startswith("[Transcription failed"):
-        chat_history.append({"role": "assistant", "content": f"🎙️ {text}"})
-        yield chat_history, friend_history, state, make_status(state), make_bar(state)
-        return
+        ROOM.add_message("assistant", f"🎙️ {text}")
+        return ROOM.get_transcript(), make_user_status(username), make_bar(username), get_pending_decisions_md()
 
-    # Show transcription
-    chat_history.append({"role": "assistant", "content": f"🎙️ *Transcribed:* {text}"})
-    yield chat_history, friend_history, state, make_status(state), make_bar(state)
-
-    # Delegate to the text processing pipeline
-    for result in process_speech(text, meeting_topic, chat_history, friend_history, state):
-        yield result[0], result[1], result[2], result[3], result[5]  # skip text-clear output
+    ROOM.add_message("assistant", f"🎙️ *{username} transcribed:* {text}")
+    return process_speech_inner(text, username, meeting_topic)
 
 
-def process_speech(
-    text: str,
-    meeting_topic: str,
-    chat_history: list,
-    friend_history: list,
-    state: dict,
-):
-    """Process a speech turn: track words, check limits, call AI, handle decisions."""
-    if not text or not text.strip():
-        yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
-        return
+def process_speech(text: str, username: str, meeting_topic: str):
+    """Process a text speech turn."""
+    if not text or not text.strip() or not username:
+        return ROOM.get_transcript(), make_user_status(username), "", make_bar(username), get_pending_decisions_md()
+
+    result = process_speech_inner(text.strip(), username.strip(), meeting_topic)
+    # return with text-clear
+    return result[0], result[1], "", result[2], result[3]
+
+
+def process_speech_inner(text: str, username: str, meeting_topic: str):
+    """Core speech processing — shared by text and audio paths."""
+    user = ROOM.get_user_state(username)
+    if not user:
+        ROOM.add_user(username)
+        user = ROOM.get_user_state(username)
 
     # ── Check if muted ──
-    if state.get("muted_until", 0) > time.time():
-        remaining = int(state["muted_until"] - time.time())
-        chat_history.append(
-            {
-                "role": "assistant",
-                "content": f"🔇 **YOU ARE MUTED** — {remaining}s remaining. Use this time to reflect on your life choices.",
-            }
+    if user.get("muted_until", 0) > time.time():
+        remaining = int(user["muted_until"] - time.time())
+        ROOM.add_message(
+            "assistant",
+            f"🔇 **{username} IS MUTED** — {remaining}s remaining.",
         )
-        yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
-        return
+        return ROOM.get_transcript(), make_user_status(username), make_bar(username), get_pending_decisions_md()
 
-    # Clear mute if expired
-    if state.get("muted_until", 0) <= time.time():
-        state["muted_until"] = 0
+    if user.get("muted_until", 0) <= time.time():
+        user["muted_until"] = 0
 
     word_count = len(text.split())
     simulated_time = word_count / WORDS_PER_SECOND
-    state["total_words"] = state.get("total_words", 0) + word_count
-    state["turn_count"] = state.get("turn_count", 0) + 1
-    state["current_words"] = word_count
+    user["total_words"] = user.get("total_words", 0) + word_count
+    user["turn_count"] = user.get("turn_count", 0) + 1
+    user["current_words"] = word_count
 
-    # Add user message to transcript
-    chat_history.append({"role": "user", "content": text})
+    ROOM.add_message("user", text, username=username)
 
     # ── Check thresholds ──
     if word_count > WORD_LIMIT:
-        state["warnings"] = state.get("warnings", 0) + 1
+        user["warnings"] = user.get("warnings", 0) + 1
 
-        if state["warnings"] >= 2:
-            state["muted_until"] = time.time() + TIMEOUT_DURATION
-            state["warnings"] = 0
-            chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "# 🔇 TIMEOUT!\n\n"
-                        f"**You talked for ~{int(simulated_time)}s with {word_count} words.**\n\n"
-                        f"You are muted for **{TIMEOUT_DURATION} seconds**.\n\n"
-                        "Go touch grass. Get a coffee. Contemplate brevity."
-                    ),
-                }
+        if user["warnings"] >= 2:
+            user["muted_until"] = time.time() + TIMEOUT_DURATION
+            user["warnings"] = 0
+            ROOM.add_message(
+                "assistant",
+                (
+                    f"# 🔇 {username} TIMED OUT!\n\n"
+                    f"**~{int(simulated_time)}s / {word_count} words.**\n\n"
+                    f"Muted for **{TIMEOUT_DURATION} seconds**. ☕"
+                ),
             )
-            yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
-            return
+            return ROOM.get_transcript(), make_user_status(username), make_bar(username), get_pending_decisions_md()
         else:
             feedback_line = random.choice(FEEDBACK_LINES)
-            chat_history.append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        f"## ⚠️ Warning {state['warnings']}/2\n\n"
-                        f"**{word_count} words** (~{int(simulated_time)}s of talking)\n\n"
-                        f"{feedback_line}\n\n"
-                        "*Next violation = 2 minute timeout*"
-                    ),
-                }
+            ROOM.add_message(
+                "assistant",
+                (
+                    f"## ⚠️ Warning {user['warnings']}/2 for {username}\n\n"
+                    f"**{word_count} words** (~{int(simulated_time)}s)\n\n"
+                    f"{feedback_line}\n\n"
+                    "*Next violation = 2 minute timeout*"
+                ),
             )
     elif word_count > WARNING_THRESHOLD:
-        chat_history.append(
-            {
-                "role": "assistant",
-                "content": f"🟡 *Getting wordy... {word_count} words. Limit is {WORD_LIMIT}.*",
-            }
+        ROOM.add_message(
+            "assistant",
+            f"🟡 *{username} getting wordy... {word_count} words. Limit is {WORD_LIMIT}.*",
         )
-
-    yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
 
     # ── AI Analysis ──
     analysis = analyze_speech(text, meeting_topic)
 
     if analysis.get("feedback"):
-        chat_history.append(
-            {"role": "assistant", "content": f"🤖 **MeetBot:** {analysis['feedback']}"}
-        )
+        ROOM.add_message("assistant", f"🤖 **MeetBot** to {username}: {analysis['feedback']}")
 
     if analysis.get("topic_drift"):
-        chat_history.append(
-            {"role": "assistant", "content": "🧭 **Topic drift detected!** Stay on track, nomad."}
-        )
+        ROOM.add_message("assistant", f"🧭 **{username} drifted off-topic!** Stay on track.")
 
-    yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
-
-    # ── Decision Detection → Friend Approval ──
+    # ── Decision Detection → Pending for human approval ──
     if analysis.get("decision_detected") and analysis.get("decision_summary"):
         decision = analysis["decision_summary"]
-
-        friend_history.append(
-            {
-                "role": "assistant",
-                "content": f"📋 **Decision detected:** *{decision}*\n\n⏳ Asking Alex for confirmation...",
-            }
-        )
-        yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
-
-        approval = get_friend_approval(decision)
-
-        if approval["approved"]:
-            emoji, verdict = "✅", "APPROVED"
-        else:
-            emoji, verdict = "❌", "REJECTED"
-
-        friend_history.append(
-            {
-                "role": "assistant",
-                "content": f"## {emoji} {verdict}\n\n**Alex says:** {approval['reason']}",
-            }
+        d = ROOM.add_pending_decision(username, decision)
+        ROOM.add_message(
+            "assistant",
+            f"📋 **Decision #{d.id} by {username}:** *{decision}*\n\n"
+            f"⏳ Waiting for a friend to approve or reject...",
         )
 
-        chat_history.append(
-            {
-                "role": "assistant",
-                "content": (
-                    f"{'✅' if approval['approved'] else '❌'} **Decision {verdict} by Alex:** "
-                    f"*{decision}*\n\n> {approval['reason']}"
-                ),
-            }
-        )
+    return ROOM.get_transcript(), make_user_status(username), make_bar(username), get_pending_decisions_md()
 
-    yield chat_history, friend_history, state, make_status(state), "", make_bar(state)
+
+def approve_decision(decision_id_str: str, reason: str, username: str):
+    """Approve a pending decision."""
+    try:
+        did = int(decision_id_str)
+    except (ValueError, TypeError):
+        return ROOM.get_transcript(), "⚠️ Enter a valid decision # number.", get_pending_decisions_md()
+
+    result = ROOM.resolve_decision(did, approved=True, resolver=username, reason=reason or "Looks good to me!")
+    if not result:
+        return ROOM.get_transcript(), "⚠️ Decision not found or already resolved.", get_pending_decisions_md()
+    return ROOM.get_transcript(), f"✅ Decision #{did} approved!", get_pending_decisions_md()
+
+
+def reject_decision(decision_id_str: str, reason: str, username: str):
+    """Reject a pending decision."""
+    try:
+        did = int(decision_id_str)
+    except (ValueError, TypeError):
+        return ROOM.get_transcript(), "⚠️ Enter a valid decision # number.", get_pending_decisions_md()
+
+    result = ROOM.resolve_decision(did, approved=False, resolver=username, reason=reason or "Nah, bad idea.")
+    if not result:
+        return ROOM.get_transcript(), "⚠️ Decision not found or already resolved.", get_pending_decisions_md()
+    return ROOM.get_transcript(), f"❌ Decision #{did} rejected!", get_pending_decisions_md()
