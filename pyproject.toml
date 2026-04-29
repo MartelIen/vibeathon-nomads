@@ -8,4 +8,5 @@ dependencies = [
     "gradio>=5.0",
     "openai>=1.0",
     "python-dotenv>=1.2.2",
+    "websockets>=16.0",
 ]

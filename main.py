@@ -1,7 +1,7 @@
 """NomadMeet — entry point."""
 
-from nomadmeet.ui import build_app, THEME, CSS
+import uvicorn
+from nomadmeet.server import app
 
 if __name__ == "__main__":
-    app = build_app()
-    app.launch(theme=THEME, css=CSS)
+    uvicorn.run(app, host="0.0.0.0", port=7860)

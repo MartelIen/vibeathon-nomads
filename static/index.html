@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NomadMeet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --rail-bg: #201f1e;
+    --panel-bg: #292828;
+    --main-bg: #1f1f1f;
+    --compose-bg: #292828;
+    --input-bg: #3b3a39;
+    --hover: #3b3a39;
+    --active: #444;
+    --border: #3b3a39;
+    --accent: #6264a7;
+    --accent-light: #7b83eb;
+    --text: #e1dfdd;
+    --text-sec: #a19f9d;
+    --text-dim: #797775;
+    --green: #6bb700;
+    --red: #c4314b;
+    --yellow: #ffaa44;
+    --msg-hover: #2b2b2b;
+    --mention: #464775;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--main-bg);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden;
+    font-size: 14px;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     JOIN SCREEN
+     ══════════════════════════════════════════════════════════ */
+  #join-screen {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100vh; gap: 20px;
+    background: var(--main-bg);
+  }
+  .join-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 40px 48px;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 20px;
+    min-width: 380px;
+  }
+  .join-card .brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 600; }
+  .join-card .brand svg { width: 28px; height: 28px; }
+  .join-card .subtitle { color: var(--text-sec); font-size: 13px; margin-top: -10px; }
+  .join-card input {
+    width: 100%; padding: 8px 12px;
+    background: var(--input-bg); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text); font-size: 14px;
+    outline: none; font-family: inherit;
+  }
+  .join-card input:focus { border-bottom: 2px solid var(--accent); }
+  .join-card .join-btn {
+    width: 100%; padding: 8px;
+    background: var(--accent); border: none; border-radius: 3px;
+    color: white; font-size: 14px; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+  }
+  .join-card .join-btn:hover { background: var(--accent-light); }
+
+  /* ══════════════════════════════════════════════════════════
+     MAIN LAYOUT
+     ══════════════════════════════════════════════════════════ */
+  #app { display: none; height: 100vh; }
+  .layout { display: flex; height: 100%; }
+
+  /* ── Icon Rail (far left) ─────────────────────────────── */
+  .rail {
+    width: 68px; background: var(--rail-bg);
+    display: flex; flex-direction: column;
+    align-items: center; padding-top: 8px;
+    border-right: 1px solid #1a1a1a;
+    flex-shrink: 0;
+  }
+  .rail-icon {
+    width: 48px; height: 48px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; cursor: pointer;
+    color: var(--text-sec); font-size: 20px;
+    margin-bottom: 2px; position: relative;
+  }
+  .rail-icon:hover { background: var(--hover); }
+  .rail-icon.active { background: var(--active); color: white; }
+  .rail-icon.active::before {
+    content: ''; position: absolute; left: 0; top: 12px; bottom: 12px;
+    width: 3px; background: var(--accent); border-radius: 0 2px 2px 0;
+  }
+  .rail-spacer { flex: 1; }
+  .rail-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--accent); display: flex;
+    align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600; color: white;
+    margin-bottom: 12px; cursor: pointer;
+  }
+
+  /* ── People Panel ─────────────────────────────────────── */
+  .people-panel {
+    width: 260px; background: var(--panel-bg);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    flex-shrink: 0;
+  }
+  .pp-header {
+    padding: 14px 16px;
+    font-size: 18px; font-weight: 700;
+    border-bottom: 1px solid var(--border);
+  }
+  .pp-section {
+    padding: 12px 16px 4px;
+    font-size: 11px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .pp-list { flex: 1; overflow-y: auto; }
+  .pp-user {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 16px; cursor: default;
+  }
+  .pp-user:hover { background: var(--hover); }
+  .pp-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600; color: white;
+    position: relative; flex-shrink: 0;
+  }
+  .pp-presence {
+    position: absolute; bottom: -1px; right: -1px;
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid var(--panel-bg);
+    background: var(--green);
+  }
+  .pp-presence.warning { background: var(--yellow); }
+  .pp-presence.muted { background: var(--red); }
+  .pp-name { font-size: 13px; color: var(--text); }
+  .pp-name .you { color: var(--text-dim); font-size: 11px; }
+  .pp-stats {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--text-sec);
+  }
+  .pp-stats .stat { display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .pp-meter { height: 3px; background: var(--input-bg); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .pp-meter-fill {
+    height: 100%; border-radius: 2px;
+    background: var(--green); width: 0%;
+    transition: width 0.4s, background 0.4s;
+  }
+  .pp-meter-fill.warn { background: var(--yellow); }
+  .pp-meter-fill.danger { background: var(--red); }
+
+  /* ── Chat Main Area ───────────────────────────────────── */
+  .chat-main {
+    flex: 1; display: flex; flex-direction: column;
+    min-width: 0;
+  }
+
+  /* Header Bar */
+  .chat-toolbar {
+    height: 48px; background: var(--panel-bg);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 20px; gap: 12px; flex-shrink: 0;
+  }
+  .ct-icon { font-size: 18px; }
+  .ct-title { font-weight: 600; font-size: 14px; }
+  .ct-topic { font-size: 12px; color: var(--text-dim); margin-left: 8px; }
+  .ct-spacer { flex: 1; }
+  .ct-btn {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; cursor: pointer;
+    color: var(--text-sec); font-size: 16px; border: none; background: none;
+  }
+  .ct-btn:hover { background: var(--hover); color: var(--text); }
+
+  /* Muted banner */
+  .mute-bar {
+    display: none; background: var(--red);
+    color: white; text-align: center;
+    padding: 8px; font-size: 13px; font-weight: 600;
+    animation: mute-pulse 2s infinite;
+  }
+  .mute-bar.show { display: block; }
+  @keyframes mute-pulse { 0%,100%{opacity:1} 50%{opacity:.75} }
+
+  /* Messages */
+  .messages {
+    flex: 1; overflow-y: auto;
+    padding: 12px 0;
+  }
+
+  /* Teams-style flat messages */
+  .msg-group {
+    padding: 8px 20px;
+    display: flex; gap: 12px;
+  }
+  .msg-group:hover { background: var(--msg-hover); }
+  .mg-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600; color: white;
+    flex-shrink: 0; margin-top: 2px;
+  }
+  .mg-body { flex: 1; min-width: 0; }
+  .mg-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+  .mg-name { font-weight: 600; font-size: 13px; }
+  .mg-time { font-size: 11px; color: var(--text-dim); }
+  .mg-text { font-size: 14px; line-height: 1.5; color: var(--text); word-wrap: break-word; }
+
+  /* System message (bot/alerts) */
+  .msg-system {
+    padding: 4px 20px 4px 64px;
+    font-size: 13px; color: var(--text-sec);
+    line-height: 1.5;
+  }
+  .msg-system.warn {
+    color: var(--yellow);
+    background: rgba(255,170,68,0.06);
+    border-left: 3px solid var(--yellow);
+    padding-left: 61px;
+  }
+  .msg-system.danger {
+    color: var(--red);
+    background: rgba(196,49,75,0.08);
+    border-left: 3px solid var(--red);
+    padding-left: 61px;
+  }
+  .msg-system.decision {
+    color: var(--accent-light);
+    background: rgba(98,100,167,0.08);
+    border-left: 3px solid var(--accent);
+    padding-left: 61px;
+  }
+  .msg-system.approved {
+    color: var(--green);
+    background: rgba(107,183,0,0.06);
+    border-left: 3px solid var(--green);
+    padding-left: 61px;
+  }
+
+  /* ── Compose Box ──────────────────────────────────────── */
+  .compose {
+    padding: 0 20px 16px;
+    flex-shrink: 0;
+  }
+  .compose-box {
+    background: var(--compose-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .compose-box:focus-within { border-color: var(--accent); }
+  .compose-toolbar {
+    display: flex; align-items: center;
+    padding: 4px 8px; gap: 2px;
+    border-bottom: 1px solid var(--border);
+  }
+  .compose-toolbar button {
+    width: 30px; height: 28px;
+    background: none; border: none;
+    color: var(--text-sec); cursor: pointer;
+    border-radius: 3px; font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .compose-toolbar button:hover { background: var(--hover); color: var(--text); }
+  .compose-toolbar button.recording { color: var(--red); background: rgba(196,49,75,0.15); }
+  .compose-toolbar .tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+  .compose-input {
+    width: 100%; padding: 10px 14px;
+    background: transparent; border: none;
+    color: var(--text); font-size: 14px;
+    font-family: inherit; resize: none;
+    outline: none; min-height: 40px; max-height: 120px;
+  }
+  .compose-input::placeholder { color: var(--text-dim); }
+  .compose-input:disabled { opacity: 0.4; }
+  .compose-footer {
+    display: flex; justify-content: space-between;
+    align-items: center; padding: 4px 8px 6px;
+  }
+  .compose-footer .quick-btns { display: flex; gap: 4px; }
+  .quick-btn {
+    background: var(--input-bg); border: 1px solid var(--border);
+    border-radius: 12px; padding: 2px 10px;
+    font-size: 11px; color: var(--text-sec);
+    cursor: pointer; font-family: inherit;
+  }
+  .quick-btn:hover { background: var(--hover); color: var(--text); }
+  .send-btn {
+    background: var(--accent); border: none;
+    border-radius: 3px; padding: 4px 14px;
+    color: white; font-size: 13px;
+    cursor: pointer; font-weight: 600;
+    font-family: inherit;
+  }
+  .send-btn:hover { background: var(--accent-light); }
+  .send-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Decision Panel (Right) ───────────────────────────── */
+  .dec-panel {
+    width: 280px; background: var(--panel-bg);
+    border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    flex-shrink: 0;
+  }
+  .dp-header {
+    padding: 14px 16px;
+    font-weight: 600; font-size: 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dp-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .dp-empty {
+    text-align: center; padding: 40px 16px;
+    color: var(--text-dim); font-size: 13px;
+  }
+  .dp-card {
+    background: var(--main-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    margin-bottom: 8px;
+  }
+  .dp-card .dp-tag {
+    font-size: 10px; font-weight: 600;
+    color: var(--accent-light);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .dp-card .dp-by { font-size: 11px; color: var(--text-dim); }
+  .dp-card .dp-text { font-size: 13px; margin: 6px 0; }
+  .dp-card input {
+    width: 100%; background: var(--input-bg);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 5px 8px; font-size: 12px;
+    color: var(--text); margin-bottom: 6px;
+    outline: none; font-family: inherit;
+  }
+  .dp-card .dp-btns { display: flex; gap: 6px; }
+  .dp-btn {
+    flex: 1; padding: 5px;
+    border: none; border-radius: 3px;
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+  }
+  .dp-btn:hover { opacity: 0.85; }
+  .dp-btn.approve { background: var(--green); color: white; }
+  .dp-btn.reject { background: var(--red); color: white; }
+
+  /* ── Scrollbar ─────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--input-bg); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ JOIN SCREEN ═══════════ -->
+<div id="join-screen">
+  <div class="join-card">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="18" rx="2" fill="#6264a7"/><path d="M7 8h10M7 12h7M7 16h10" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
+      NomadMeet
+    </div>
+    <div class="subtitle">Real-time meeting monitor for digital nomads</div>
+    <input type="text" id="join-name" placeholder="Enter your name" autofocus
+           onkeydown="if(event.key==='Enter')joinMeeting()">
+    <button class="join-btn" onclick="joinMeeting()">Join meeting</button>
+  </div>
+</div>
+
+<!-- ═══════════ MAIN APP ═══════════ -->
+<div id="app">
+<div class="layout">
+
+  <!-- Icon Rail -->
+  <div class="rail">
+    <div class="rail-icon active" title="Meeting">💬</div>
+    <div class="rail-icon" title="Calendar">📅</div>
+    <div class="rail-icon" title="Files">📁</div>
+    <div class="rail-spacer"></div>
+    <div class="rail-avatar" id="rail-me"></div>
+  </div>
+
+  <!-- People Panel -->
+  <div class="people-panel">
+    <div class="pp-header">Meeting</div>
+    <div class="pp-section">Participants</div>
+    <div class="pp-list" id="pp-list"></div>
+    <div class="pp-stats" id="pp-stats">
+      <div class="stat"><span>Words spoken</span><span id="s-words">0</span></div>
+      <div class="stat"><span>Turns</span><span id="s-turns">0</span></div>
+      <div class="stat"><span>Warnings</span><span id="s-warn">0 / 2</span></div>
+      <div class="pp-meter"><div class="pp-meter-fill" id="s-bar"></div></div>
+    </div>
+  </div>
+
+  <!-- Chat Main -->
+  <div class="chat-main">
+    <div class="chat-toolbar">
+      <span class="ct-icon">📞</span>
+      <span class="ct-title">General</span>
+      <span class="ct-topic" id="ct-topic">Q3 planning &amp; team logistics</span>
+      <span class="ct-spacer"></span>
+      <button class="ct-btn" title="People">👥</button>
+    </div>
+    <div class="mute-bar" id="mute-bar">🔇 You are muted — <span id="mute-sec">0</span>s remaining</div>
+    <div class="messages" id="messages"></div>
+    <div class="compose">
+      <div class="compose-box">
+        <div class="compose-toolbar">
+          <button title="Format">𝐁</button>
+          <button title="Attach">📎</button>
+          <button title="Emoji">😊</button>
+          <span class="tb-sep"></span>
+          <button id="mic-btn" title="Record audio" onclick="toggleMic()">🎤</button>
+        </div>
+        <textarea class="compose-input" id="msg-input" placeholder="Type a new message"
+                  rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+        <div class="compose-footer">
+          <div class="quick-btns">
+            <button class="quick-btn" onclick="quickSend('short')">💬 Short</button>
+            <button class="quick-btn" onclick="quickSend('long')">🗣 Ramble</button>
+            <button class="quick-btn" onclick="quickSend('decision')">🤔 Decision</button>
+          </div>
+          <button class="send-btn" id="send-btn" onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Decision Panel -->
+  <div class="dec-panel">
+    <div class="dp-header">📋 Decisions</div>
+    <div class="dp-list" id="dp-list">
+      <div class="dp-empty">No pending decisions.<br><span style="font-size:11px;color:var(--text-dim)">Propose something in chat!</span></div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   DATA
+   ═══════════════════════════════════════════════════════════ */
+const SAMPLES = {
+  short: "I think the new landing page looks great. Let's ship it.",
+  long: "So basically what I was thinking is that we should probably consider maybe looking into the possibility of potentially exploring some alternative options for our coworking space situation because honestly the WiFi here in Bali has been absolutely terrible lately and I can't even join a Zoom call without dropping out at least three times and then there's the whole visa situation which is just a nightmare because I have to do a visa run every 30 days and it's getting really expensive flying to Singapore and back every month and I was also thinking about maybe we should look into getting a virtual mailbox service because I keep getting important documents sent to my parents house and they have to scan everything and send it to me and it's just not a sustainable solution long term especially when we're dealing with tax documents and legal stuff that really needs to be handled properly and on time and speaking of taxes has anyone figured out the whole tax residency thing because I've been talking to three different accountants and they all say different things.",
+  decision: "I think we should move the entire team to Lisbon for Q3. The coworking spaces are better, the food is amazing, and the timezone works for both US and EU clients. Let's do it."
+};
+const AVATAR_COLORS = ['#6264a7','#c4314b','#e97548','#92c353','#13a4a5','#b4a0ff','#e5558a','#498205'];
+
+let ws=null, myName='', mediaRecorder=null, audioChunks=[], isRecording=false;
+
+function avatarColor(name){ return AVATAR_COLORS[name.charCodeAt(0)%AVATAR_COLORS.length]; }
+function initial(name){ return name.charAt(0).toUpperCase(); }
+function timeNow(){ return new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+
+/* ═══════════════════════════════════════════════════════════
+   JOIN
+   ═══════════════════════════════════════════════════════════ */
+function joinMeeting(){
+  const n=document.getElementById('join-name').value.trim();
+  if(!n)return;
+  myName=n;
+  document.getElementById('join-screen').style.display='none';
+  document.getElementById('app').style.display='block';
+  document.getElementById('rail-me').textContent=initial(n);
+  document.getElementById('rail-me').style.background=avatarColor(n);
+
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  connect(proto);
+}
+
+function connect(proto){
+  ws=new WebSocket(`${proto}//${location.host}/ws/${encodeURIComponent(myName)}`);
+  ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='state')render(d);};
+  ws.onclose=()=>setTimeout(()=>connect(proto),2000);
+  setInterval(()=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({action:'ping'}));},3000);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RENDER
+   ═══════════════════════════════════════════════════════════ */
+function render(s){
+  renderUsers(s.users, s.user_state);
+  renderMessages(s.transcript);
+  renderStats(s.user_state);
+  renderDecisions(s.pending_decisions);
+  renderMute(s.user_state);
+}
+
+function renderUsers(users, me){
+  const el=document.getElementById('pp-list');
+  el.innerHTML=users.map(u=>{
+    const isMe=u===myName;
+    let pClass='';
+    if(isMe && me.muted_remaining>0) pClass='muted';
+    else if(isMe && me.warnings>0) pClass='warning';
+    return `<div class="pp-user">
+      <div class="pp-avatar" style="background:${avatarColor(u)}">
+        ${initial(u)}
+        <div class="pp-presence ${pClass}"></div>
+      </div>
+      <div class="pp-name">${u}${isMe?' <span class="you">(you)</span>':''}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderMessages(transcript){
+  const el=document.getElementById('messages');
+  const atBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-50;
+
+  let html='';
+  let lastUser=null;
+  for(const msg of transcript){
+    if(msg.role==='user'){
+      // Extract username from "**Name:** text"
+      const m=msg.content.match(/^\*\*(.+?):\*\*\s*([\s\S]*)$/);
+      const name=m?m[1]:'User';
+      const text=m?m[2]:msg.content;
+      const isSelf=name===myName;
+
+      if(name!==lastUser){
+        html+=`<div class="msg-group">
+          <div class="mg-avatar" style="background:${avatarColor(name)}">${initial(name)}</div>
+          <div class="mg-body">
+            <div class="mg-header">
+              <span class="mg-name" style="color:${avatarColor(name)}">${name}</span>
+              <span class="mg-time">${timeNow()}</span>
+            </div>
+            <div class="mg-text">${esc(text)}</div>
+          </div>
+        </div>`;
+        lastUser=name;
+      } else {
+        // Continuation of same user — just add text
+        html+=`<div style="padding:2px 20px 2px 64px"><div class="mg-text">${esc(text)}</div></div>`;
+      }
+    } else {
+      lastUser=null;
+      const c=msg.content;
+      let cls='msg-system';
+      if(c.includes('⚠️')||c.includes('🟡')||c.includes('Warning')) cls+=' warn';
+      if(c.includes('🔇')||c.includes('TIMEOUT')||c.includes('MUTED')) cls+=' danger';
+      if(c.includes('📋')||c.includes('Decision #')) cls+=' decision';
+      if(c.includes('✅')&&c.includes('APPROVED')) cls+=' approved';
+      if(c.includes('❌')&&c.includes('REJECTED')) cls+=' danger';
+      html+=`<div class="${cls}">${fmt(c)}</div>`;
+    }
+  }
+  el.innerHTML=html;
+  if(atBottom) el.scrollTop=el.scrollHeight;
+}
+
+function esc(t){
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmt(t){
+  return t
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/\n/g,'<br>');
+}
+
+function renderStats(s){
+  document.getElementById('s-words').textContent=s.total_words;
+  document.getElementById('s-turns').textContent=s.turn_count;
+  document.getElementById('s-warn').textContent=`${s.warnings} / 2`;
+  const pct=Math.min(100,(s.current_words/s.word_limit)*100);
+  const bar=document.getElementById('s-bar');
+  bar.style.width=pct+'%';
+  bar.className='pp-meter-fill';
+  if(pct>90) bar.classList.add('danger');
+  else if(pct>66) bar.classList.add('warn');
+}
+
+function renderDecisions(decs){
+  const el=document.getElementById('dp-list');
+  if(!decs||!decs.length){
+    el.innerHTML='<div class="dp-empty">No pending decisions.<br><span style="font-size:11px;color:var(--text-dim)">Propose something in chat!</span></div>';
+    return;
+  }
+  el.innerHTML=decs.map(d=>`<div class="dp-card">
+    <div class="dp-tag">Decision #${d.id}</div>
+    <div class="dp-by">by ${d.proposer}</div>
+    <div class="dp-text">${esc(d.summary)}</div>
+    <input id="r-${d.id}" placeholder="Reason (optional)">
+    <div class="dp-btns">
+      <button class="dp-btn approve" onclick="resolve(${d.id},true)">✅ Approve</button>
+      <button class="dp-btn reject" onclick="resolve(${d.id},false)">❌ Reject</button>
+    </div>
+  </div>`).join('');
+}
+
+function renderMute(s){
+  const bar=document.getElementById('mute-bar');
+  const inp=document.getElementById('msg-input');
+  const btn=document.getElementById('send-btn');
+  if(s.muted_remaining>0){
+    bar.classList.add('show');
+    document.getElementById('mute-sec').textContent=s.muted_remaining;
+    inp.disabled=true; inp.placeholder=`Muted for ${s.muted_remaining}s...`;
+    btn.disabled=true;
+  } else {
+    bar.classList.remove('show');
+    inp.disabled=false; inp.placeholder='Type a new message';
+    btn.disabled=false;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ACTIONS
+   ═══════════════════════════════════════════════════════════ */
+function sendMessage(){
+  const inp=document.getElementById('msg-input');
+  const t=inp.value.trim();
+  if(!t||!ws||ws.readyState!==1)return;
+  ws.send(JSON.stringify({action:'speech',text:t}));
+  inp.value=''; inp.style.height='auto';
+}
+function quickSend(k){
+  document.getElementById('msg-input').value=SAMPLES[k];
+  sendMessage();
+}
+function resolve(id,ok){
+  const r=document.getElementById(`r-${id}`);
+  ws.send(JSON.stringify({
+    action:ok?'approve':'reject',
+    decision_id:id,
+    reason:r?r.value.trim()||undefined:undefined
+  }));
+}
+
+/* ── Mic ────────────────────────────────────────────────── */
+async function toggleMic(){
+  const btn=document.getElementById('mic-btn');
+  if(isRecording){
+    isRecording=false; btn.classList.remove('recording'); btn.textContent='🎤';
+    if(mediaRecorder&&mediaRecorder.state!=='inactive') mediaRecorder.stop();
+    return;
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    mediaRecorder=new MediaRecorder(stream); audioChunks=[];
+    mediaRecorder.ondataavailable=e=>audioChunks.push(e.data);
+    mediaRecorder.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      const blob=new Blob(audioChunks,{type:'audio/webm'});
+      const fd=new FormData(); fd.append('file',blob,'rec.webm');
+      fetch(`/api/audio/${encodeURIComponent(myName)}`,{method:'POST',body:fd}).catch(console.error);
+    };
+    mediaRecorder.start(); isRecording=true;
+    btn.classList.add('recording'); btn.textContent='⏹';
+  }catch(e){console.error('Mic denied',e);}
+}
+
+/* Auto-resize textarea */
+document.addEventListener('DOMContentLoaded',()=>{
+  const ta=document.getElementById('msg-input');
+  if(ta) ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';});
+});
+</script>
+</body>
+</html>
